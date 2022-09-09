@@ -52,7 +52,7 @@ if mode == "train":
     num_workers = 4
 
     # Load the address of the pretrained model
-    pretrained_model_weights_path = ""
+    pretrained_model_weights_path = "./results/pretrained_models/MSRN_x2-DIV2K-e19a5cef.pth.tar"
 
     # Incremental training and migration training
     resume = ""
@@ -83,5 +83,6 @@ if mode == "test":
     # Test data address
     test_gt_images_dir = "./data/Set5/GTmod12"
     test_lr_images_dir = f"./data/Set5/LRbicx{upscale_factor}"
+    sr_dir = f"./results/{exp_name}"
 
-    model_weights_path = "./results/pretrained_models/MSRN_x2-DIV2K-XXXXXXXX.pth.tar"
+    model_weights_path = "./results/pretrained_models/MSRN_x2-DIV2K-e19a5cef.pth.tar"

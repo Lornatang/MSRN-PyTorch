@@ -20,69 +20,74 @@ from natsort import natsorted
 import config
 import imgproc
 from image_quality_assessment import PSNR, SSIM
-from model import MemNet
+import model
+from utils import make_directory
+
+model_names = sorted(
+    name for name in model.__dict__ if
+    name.islower() and not name.startswith("__") and callable(model.__dict__[name]))
 
 
 def main() -> None:
-    # Initialize the super-resolution model
-    model = MemNet(config.num_memory_blocks, config.num_residual_blocks)
-    model = model.to(device=config.device, memory_format=torch.channels_last)
-    print("Build MemNet model successfully.")
+    # Initialize the super-resolution msrn_model
+    msrn_model = model.__dict__[config.model_arch_name](in_channels=config.in_channels,
+                                                        out_channels=config.out_channels)
+    msrn_model = msrn_model.to(device=config.device)
+    print(f"Build `{config.model_arch_name}` model successfully.")
 
-    # Load the super-resolution model weights
-    checkpoint = torch.load(config.model_path, map_location=lambda storage, loc: storage)
-    model.load_state_dict(checkpoint["state_dict"])
-    print(f"Load MemNet model weights `{os.path.abspath(config.model_path)}` successfully.")
+    # Load the super-resolution msrn_model weights
+    checkpoint = torch.load(config.model_weights_path, map_location=lambda storage, loc: storage)
+    msrn_model.load_state_dict(checkpoint["state_dict"])
+    print(f"Load `{config.model_arch_name}` model weights `{os.path.abspath(config.model_weights_path)}` successfully.")
 
     # Create a folder of super-resolution experiment results
-    if not os.path.exists(config.sr_dir):
-        os.makedirs(config.sr_dir)
+    make_directory(config.sr_dir)
 
-    # Start the verification mode of the model.
-    model.eval()
+    # Start the verification mode of the msrn_model.
+    msrn_model.eval()
 
     # Initialize the sharpness evaluation function
     psnr = PSNR(config.upscale_factor, config.only_test_y_channel)
     ssim = SSIM(config.upscale_factor, config.only_test_y_channel)
 
-    # Set the sharpness evaluation function calculation device to the specified model
-    psnr = psnr.to(device=config.device, memory_format=torch.channels_last, non_blocking=True)
-    ssim = ssim.to(device=config.device, memory_format=torch.channels_last, non_blocking=True)
+    # Set the sharpness evaluation function calculation device to the specified msrn_model
+    psnr = psnr.to(device=config.device, non_blocking=True)
+    ssim = ssim.to(device=config.device, non_blocking=True)
 
     # Initialize IQA metrics
     psnr_metrics = 0.0
     ssim_metrics = 0.0
 
     # Get a list of test image file names.
-    file_names = natsorted(os.listdir(config.hr_dir))
+    file_names = natsorted(os.listdir(config.test_gt_images_dir))
     # Get the number of test image files.
     total_files = len(file_names)
 
     for index in range(total_files):
-        hr_image_path = os.path.join(config.hr_dir, file_names[index])
+        gt_image_path = os.path.join(config.test_gt_images_dir, file_names[index])
         sr_image_path = os.path.join(config.sr_dir, file_names[index])
+        lr_image_path = os.path.join(config.test_lr_images_dir, file_names[index])
 
-        print(f"Processing `{os.path.abspath(hr_image_path)}`...")
+        print(f"Processing `{os.path.abspath(gt_image_path)}`...")
         # Read LR image and HR image
-        hr_image = cv2.imread(hr_image_path, cv2.IMREAD_UNCHANGED)
-        lr_image = imgproc.image_resize(hr_image, 1 / config.upscale_factor)
-        lr_image = imgproc.image_resize(lr_image, 1 / config.upscale_factor)
+        gt_image = cv2.imread(gt_image_path).astype(np.float32) / 255.0
+        lr_image = cv2.imread(lr_image_path).astype(np.float32) / 255.0
 
         # Convert BGR channel image format data to RGB channel image format data
+        gt_image = cv2.cvtColor(gt_image, cv2.COLOR_BGR2RGB)
         lr_image = cv2.cvtColor(lr_image, cv2.COLOR_BGR2RGB)
-        hr_image = cv2.cvtColor(hr_image, cv2.COLOR_BGR2RGB)
 
         # Convert RGB channel image format data to Tensor channel image format data
+        gt_tensor = imgproc.image_to_tensor(gt_image, False, False).unsqueeze_(0)
         lr_tensor = imgproc.image_to_tensor(lr_image, False, False).unsqueeze_(0)
-        hr_tensor = imgproc.image_to_tensor(hr_image, False, False).unsqueeze_(0)
 
         # Transfer Tensor channel image format data to CUDA device
-        lr_tensor = lr_tensor.to(device=config.device, memory_format=torch.channels_last, non_blocking=True)
-        hr_tensor = hr_tensor.to(device=config.device, memory_format=torch.channels_last, non_blocking=True)
+        gt_tensor = gt_tensor.to(device=config.device, non_blocking=True)
+        lr_tensor = lr_tensor.to(device=config.device, non_blocking=True)
 
         # Only reconstruct the Y channel image data.
         with torch.no_grad():
-            sr_tensor = model(lr_tensor)
+            sr_tensor = msrn_model(lr_tensor)
 
         # Save image
         sr_image = imgproc.tensor_to_image(sr_tensor, False, False)
@@ -90,8 +95,8 @@ def main() -> None:
         cv2.imwrite(sr_image_path, sr_image)
 
         # Cal IQA metrics
-        psnr_metrics += psnr(sr_tensor, hr_tensor).item()
-        ssim_metrics += ssim(sr_tensor, hr_tensor).item()
+        psnr_metrics += psnr(sr_tensor, gt_tensor).item()
+        ssim_metrics += ssim(sr_tensor, gt_tensor).item()
 
     # Calculate the average value of the sharpness evaluation index,
     # and all index range values are cut according to the following values
